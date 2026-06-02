@@ -14,5 +14,6 @@
 .classpath
 .settings/
 
-# Local verification artifacts (screenshots, ui dumps)
-/.claude/verify/
+# Claude Code local files
+/.claude/
+/CLAUDE.md
