@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<navigation xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/nav_graph"
+    app:startDestination="@id/shelfFragment">
+
+    <fragment
+        android:id="@+id/readingFragment"
+        android:name="com.lwl.bookreader.ui.reading.ReadingFragment"
+        android:label="@string/tab_reading" />
+    <fragment
+        android:id="@+id/shelfFragment"
+        android:name="com.lwl.bookreader.ui.shelf.ShelfFragment"
+        android:label="@string/tab_shelf" />
+    <fragment
+        android:id="@+id/cloudFragment"
+        android:name="com.lwl.bookreader.ui.cloud.CloudFragment"
+        android:label="@string/tab_cloud" />
+    <fragment
+        android:id="@+id/vipFragment"
+        android:name="com.lwl.bookreader.ui.vip.VipFragment"
+        android:label="@string/tab_vip" />
+    <fragment
+        android:id="@+id/accountFragment"
+        android:name="com.lwl.bookreader.ui.account.AccountFragment"
+        android:label="@string/tab_account" />
+
+</navigation>
