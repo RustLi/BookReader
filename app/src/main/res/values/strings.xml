@@ -6,4 +6,21 @@
     <string name="tab_cloud">云端</string>
     <string name="tab_vip">会员</string>
     <string name="tab_account">账号</string>
+
+    <!-- 书架 -->
+    <string name="shelf_title">书架</string>
+    <string name="shelf_filter_hint">输入书名,进行筛选</string>
+    <string name="shelf_filter_all">全部图书</string>
+    <string name="shelf_sort">排序</string>
+    <string name="shelf_empty">书架空空如也,点击右上角 + 导入图书</string>
+    <string name="shelf_add">导入图书</string>
+    <string name="cd_cover">封面</string>
+    <string name="shelf_status_new">新添加</string>
+    <string name="shelf_status_just">刚刚读过</string>
+    <string name="shelf_status_hours">%1$d小时前读过</string>
+    <string name="shelf_status_days">%1$d天前读过</string>
+    <string name="shelf_delete_title">删除《%1$s》?</string>
+    <string name="shelf_delete_message">将从书架移除该书。</string>
+    <string name="action_delete">删除</string>
+    <string name="action_cancel">取消</string>
 </resources>
