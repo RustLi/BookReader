@@ -21,6 +21,12 @@ import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import android.view.ViewGroup;
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -62,6 +68,7 @@ public class ReaderActivity extends AppCompatActivity {
     private File extractDir;
     private int currentChapter;
     private boolean barsVisible = true;
+    private String currentChapterTitle = "";
 
     private boolean restorePending;
     private float pendingScrollFraction;
@@ -103,11 +110,13 @@ public class ReaderActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         binding = ActivityReaderBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         repository = new BookRepository(this);
         prefs = new ReaderPrefs(this);
 
+        applyWindowInsets();
         setupWebView();
         setupControls();
         applyBrightness();
@@ -128,15 +137,23 @@ public class ReaderActivity extends AppCompatActivity {
         ws.setTextZoom(prefs.getFontZoom());
         binding.web.setBackgroundColor(prefs.bgColor());
         binding.web.addJavascriptInterface(new TtsBridge(), "Android");
+        binding.web.setHorizontalScrollBarEnabled(false);
+        binding.web.setVerticalScrollBarEnabled(false);
 
         binding.web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
                 injectReaderCss();
+                extractAndShowChapterHeading();
                 if (restorePending) {
                     restorePending = false;
                     final float frac = pendingScrollFraction;
-                    main.postDelayed(() -> applyScrollFraction(frac), 150);
+                    main.postDelayed(() -> {
+                        applyScrollFraction(frac);
+                        updatePageInfo();
+                    }, 300);
+                } else {
+                    main.postDelayed(ReaderActivity.this::updatePageInfo, 300);
                 }
                 ttsPrepared = false;
                 if (ttsWanted) {
@@ -158,9 +175,9 @@ public class ReaderActivity extends AppCompatActivity {
                         int w = binding.web.getWidth();
                         float x = e.getX();
                         if (x < w * 0.30f) {
-                            turnChapter(-1);
+                            turnPage(-1);
                         } else if (x > w * 0.70f) {
-                            turnChapter(1);
+                            turnPage(1);
                         } else {
                             toggleBars();
                         }
@@ -169,7 +186,7 @@ public class ReaderActivity extends AppCompatActivity {
                 });
         binding.web.setOnTouchListener((v, e) -> {
             gesture.onTouchEvent(e);
-            return false;
+            return true;   // 消费所有触摸事件，禁止 WebView 原生滑动
         });
     }
 
@@ -281,14 +298,17 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     private void applyScrollFraction(float frac) {
-        int max = Math.max(0, binding.web.verticalRange() - binding.web.getHeight());
-        binding.web.scrollTo(0, (int) (clampF(frac, 0f, 1f) * max));
+        int pageW = binding.web.getWidth();
+        int max = Math.max(0, binding.web.horizontalRange() - pageW);
+        int scrollX = (int) (clampF(frac, 0f, 1f) * max);
+        if (pageW > 0) scrollX = (scrollX / pageW) * pageW;  // 对齐页边界
+        binding.web.scrollTo(scrollX, 0);
     }
 
     private float scrollFraction() {
-        int max = binding.web.verticalRange() - binding.web.getHeight();
+        int max = binding.web.horizontalRange() - binding.web.getWidth();
         if (max <= 0) return 0f;
-        return clampF(binding.web.getScrollY() / (float) max, 0f, 1f);
+        return clampF(binding.web.getScrollX() / (float) max, 0f, 1f);
     }
 
     private void updateProgressUi() {
@@ -296,13 +316,86 @@ public class ReaderActivity extends AppCompatActivity {
         float overall = (currentChapter + scrollFraction()) / epub.spine.size();
         binding.seek.setProgress((int) (overall * 1000));
         binding.progressText.setText((int) (overall * 100) + "%");
+        updatePageInfo();
+    }
+
+    private void applyWindowInsets() {
+        float d = getResources().getDisplayMetrics().density;
+        int pad4 = (int) (4 * d), pad6 = (int) (6 * d), pad16 = (int) (16 * d);
+        ViewCompat.setOnApplyWindowInsetsListener(binding.getRoot(), (v, insets) -> {
+            Insets sys = insets.getInsets(WindowInsetsCompat.Type.systemBars());
+            binding.topBar.setPadding(pad4, sys.top + pad6, pad4, pad6);
+            binding.bottomBar.setPadding(0, 0, 0, sys.bottom + pad6);
+            // 章节标题浮层：顶部避开状态栏
+            binding.tvChapterTitle.setPadding(pad16, sys.top + pad6, pad16, 0);
+            // 页码浮层：右下角避开导航栏
+            ViewGroup.MarginLayoutParams lp =
+                    (ViewGroup.MarginLayoutParams) binding.tvPageInfo.getLayoutParams();
+            lp.bottomMargin = sys.bottom + pad6;
+            lp.rightMargin = pad16;
+            binding.tvPageInfo.setLayoutParams(lp);
+            return WindowInsetsCompat.CONSUMED;
+        });
     }
 
     private void toggleBars() {
         barsVisible = !barsVisible;
-        int v = barsVisible ? View.VISIBLE : View.GONE;
-        binding.topBar.setVisibility(v);
-        binding.bottomBar.setVisibility(v);
+        int barVis = barsVisible ? View.VISIBLE : View.GONE;
+        int overlayVis = barsVisible ? View.GONE : View.VISIBLE;
+        binding.topBar.setVisibility(barVis);
+        binding.bottomBar.setVisibility(barVis);
+        binding.tvChapterTitle.setVisibility(overlayVis);
+        binding.tvPageInfo.setVisibility(overlayVis);
+        // 系统栏始终保持隐藏（沉浸式），点击中间只切换应用内顶/底栏浮层。
+        // 这样 WebView 视口尺寸恒定、不随系统栏显隐缩放，正文不再跳动。
+    }
+
+    /** 隐藏系统状态栏 / 导航栏，并设置为滑动临时显示，保持沉浸式且不改变 WebView 视口。 */
+    private void hideSystemBars() {
+        WindowInsetsControllerCompat ctrl =
+                WindowCompat.getInsetsController(getWindow(), binding.getRoot());
+        ctrl.setSystemBarsBehavior(
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+        ctrl.hide(WindowInsetsCompat.Type.systemBars());
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // 系统栏始终隐藏（即使应用内工具栏显示），保证 WebView 视口恒定不缩放。
+        if (hasFocus) hideSystemBars();
+    }
+
+    private void turnPage(int delta) {
+        if (epub == null) return;
+        int pageW = binding.web.getWidth();
+        if (pageW == 0) return;
+        int scrollX = binding.web.getScrollX();
+        int contentW = binding.web.horizontalRange();
+        if (delta > 0) {
+            if (scrollX + pageW >= contentW - 10) {
+                int target = currentChapter + 1;
+                if (target < epub.spine.size()) {
+                    restorePending = false;
+                    loadChapter(target);
+                }
+            } else {
+                binding.web.scrollBy(pageW, 0);
+                updatePageInfo();
+            }
+        } else {
+            if (scrollX <= 0) {
+                int target = currentChapter - 1;
+                if (target >= 0) {
+                    pendingScrollFraction = 1f;
+                    restorePending = true;
+                    loadChapter(target);
+                }
+            } else {
+                binding.web.scrollBy(-pageW, 0);
+                updatePageInfo();
+            }
+        }
     }
 
     private void showToc() {
@@ -357,25 +450,96 @@ public class ReaderActivity extends AppCompatActivity {
         getWindow().setAttributes(lp);
     }
 
-    /** 应用主题底色到页面外壳(根布局 + WebView 背景)。 */
+    /** 应用主题底色到页面外壳(根布局 + WebView 背景)，同时更新浮层文字颜色。 */
     private void applyThemeChrome() {
         binding.getRoot().setBackgroundColor(prefs.bgColor());
         binding.web.setBackgroundColor(prefs.bgColor());
+        int overlayColor = (prefs.textColor() & 0x00FFFFFF) | 0x99000000;
+        binding.tvChapterTitle.setTextColor(overlayColor);
+        binding.tvPageInfo.setTextColor(overlayColor);
     }
 
-    /** 注入主题色 / 行距 CSS。 */
+    /** 注入主题色 / 行距 / 多栏分页 CSS。 */
     private void injectReaderCss() {
         String bg = hex(prefs.bgColor());
         String fg = hex(prefs.textColor());
         float lh = prefs.lineHeight();
-        String css = "html,body{background:" + bg + " !important;color:" + fg
-                + " !important;line-height:" + lh + " !important;}"
-                + "a{color:#3F8CFF !important;}img{max-width:100% !important;height:auto !important;}";
-        String js = "(function(){var id='__readercss';var s=document.getElementById(id);"
-                + "if(!s){s=document.createElement('style');s.id=id;"
-                + "(document.head||document.documentElement).appendChild(s);}"
-                + "s.textContent=" + jsString(css) + ";})()";
+        // html 负责左右页边距；body 多栏横向分页
+        // 列高使用 Java 侧 WebView 物理高度（match_parent 全屏，系统栏显隐不影响此值）
+        String css = "html{overflow:hidden !important;height:100% !important;"
+                + "padding:0 5% !important;box-sizing:border-box !important;}"
+                + "body{background:" + bg + " !important;color:" + fg + " !important;"
+                + "-webkit-column-width:100% !important;column-width:100% !important;"
+                + "-webkit-column-gap:0 !important;column-gap:0 !important;"
+                + "height:__H__ !important;overflow:hidden !important;"
+                // border-box：列高含上下内边距，避免内容被视口裁切；加大上下边距留出呼吸空间
+                + "box-sizing:border-box !important;"
+                + "padding:2.2em 0 !important;margin:0 !important;}"
+                + "body,body *{line-height:" + lh + " !important;}"
+                + "body,body *{color:" + fg + " !important;}"
+                + "a{color:#3F8CFF !important;}"
+                + "img{max-width:100% !important;height:auto !important;}";
+
+        int webH = binding.web.getHeight();
+        String js;
+        if (webH > 0) {
+            // Java 侧高度稳定，直接替换，不走 JS 量取视口高度
+            String finalCss = css.replace("__H__", webH + "px");
+            js = "(function(){"
+                    + "var id='__readercss';var s=document.getElementById(id);"
+                    + "if(!s){s=document.createElement('style');s.id=id;"
+                    + "(document.head||document.documentElement).appendChild(s);}"
+                    + "s.textContent=" + jsString(finalCss) + ";"
+                    + "})()";
+        } else {
+            // 极少数情况 View 尚未测量，回退到 JS 量取
+            js = "(function(){"
+                    + "var h=(window.innerHeight||document.documentElement.clientHeight)+'px';"
+                    + "var id='__readercss';var s=document.getElementById(id);"
+                    + "if(!s){s=document.createElement('style');s.id=id;"
+                    + "(document.head||document.documentElement).appendChild(s);}"
+                    + "s.textContent=" + jsString(css) + ".replace('__H__',h);"
+                    + "})()";
+        }
         binding.web.evaluateJavascript(js, null);
+    }
+
+    /** 提取章节标题并显示在浮层 TextView，同时在 HTML 中隐藏该元素。 */
+    private void extractAndShowChapterHeading() {
+        String js = "(function(){"
+                + "if(window.__headProcessed)return '';"
+                + "window.__headProcessed=true;"
+                + "var b=document.body;if(!b)return '';"
+                + "var el=b.firstElementChild;"
+                + "while(el&&!el.textContent.trim()){el=el.nextElementSibling;}"
+                + "if(!el)return '';"
+                + "var t=el.tagName;"
+                + "var txt=el.textContent.replace(/\\s+/g,' ').trim();"
+                + "if(t==='H1'||t==='H2'||t==='H3'||"
+                + "(txt.length<=50&&/第[一二三四五六七八九十百千\\d]+[回章节卷]/.test(txt))){"
+                + "el.style.display='none';"
+                + "return txt;"
+                + "}"
+                + "return '';"
+                + "})()";
+        binding.web.evaluateJavascript(js, value -> {
+            final String title = unquote(value);
+            main.post(() -> {
+                if (!title.isEmpty()) {
+                    currentChapterTitle = title;
+                    binding.tvChapterTitle.setText(title);
+                }
+            });
+        });
+    }
+
+    /** 更新右下角页码（当前页 / 总页）。 */
+    private void updatePageInfo() {
+        int pageW = binding.web.getWidth();
+        if (pageW <= 0) return;
+        int currentPage = binding.web.getScrollX() / pageW + 1;
+        int totalPages = Math.max(1, (binding.web.horizontalRange() + pageW - 1) / pageW);
+        binding.tvPageInfo.setText(currentPage + " / " + totalPages);
     }
 
     private void showSettings() {

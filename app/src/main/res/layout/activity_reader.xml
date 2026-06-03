@@ -9,6 +9,28 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- 阅读浮层：章节标题（工具栏隐藏时显示） -->
+    <TextView
+        android:id="@+id/tv_chapter_title"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:textSize="11sp"
+        android:textColor="#99333333"
+        android:visibility="gone" />
+
+    <!-- 阅读浮层：页码（工具栏隐藏时显示） -->
+    <TextView
+        android:id="@+id/tv_page_info"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:textSize="11sp"
+        android:textColor="#99333333"
+        android:visibility="gone" />
+
     <!-- 顶栏 -->
     <LinearLayout
         android:id="@+id/top_bar"
@@ -17,7 +39,6 @@
         android:layout_gravity="top"
         android:background="@color/white"
         android:elevation="4dp"
-        android:fitsSystemWindows="true"
         android:gravity="center_vertical"
         android:orientation="horizontal"
         android:paddingHorizontal="4dp"
