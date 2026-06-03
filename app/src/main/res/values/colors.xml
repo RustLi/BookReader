@@ -5,4 +5,5 @@
     <color name="white">#FFFFFFFF</color>
     <color name="text_primary">#222222</color>
     <color name="nav_unselected">#9A9A9A</color>
+    <color name="reader_bg">#EDE5D3</color>
 </resources>

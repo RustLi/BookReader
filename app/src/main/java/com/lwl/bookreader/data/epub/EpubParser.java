@@ -85,6 +85,127 @@ public final class EpubParser {
         return meta;
     }
 
+    /** 解析阅读所需结构:阅读顺序(spine)与目录(NCX)。 */
+    public static EpubBook openForReading(java.io.File epubFile) throws Exception {
+        EpubBook book = new EpubBook();
+        try (ZipFile zip = new ZipFile(epubFile)) {
+            String opfPath = findOpfPath(zip);
+            if (opfPath == null) {
+                throw new IllegalStateException("未找到 OPF,可能不是有效的 EPUB");
+            }
+            String opfDir = parentDir(opfPath);
+
+            List<Item> manifest = new ArrayList<>();
+            List<String> spineRefs = new ArrayList<>();
+            String ncxId = null;          // <spine toc="...">
+            String ncxHrefByType = null;  // manifest 中 dtbncx 类型项
+
+            ZipEntry opf = zip.getEntry(opfPath);
+            try (InputStream in = zip.getInputStream(opf)) {
+                XmlPullParser p = Xml.newPullParser();
+                p.setInput(in, null);
+                int ev = p.getEventType();
+                while (ev != XmlPullParser.END_DOCUMENT) {
+                    if (ev == XmlPullParser.START_TAG) {
+                        String name = local(p.getName());
+                        if ("title".equals(name) && book.title == null) {
+                            book.title = trimToNull(safeText(p));
+                        } else if ("creator".equals(name) && book.author == null) {
+                            book.author = trimToNull(safeText(p));
+                        } else if ("item".equals(name)) {
+                            Item it = new Item();
+                            it.id = p.getAttributeValue(null, "id");
+                            it.href = p.getAttributeValue(null, "href");
+                            it.type = p.getAttributeValue(null, "media-type");
+                            if (it.href != null) manifest.add(it);
+                            if ("application/x-dtbncx+xml".equals(it.type)) {
+                                ncxHrefByType = it.href;
+                            }
+                        } else if ("spine".equals(name)) {
+                            String toc = p.getAttributeValue(null, "toc");
+                            if (toc != null) ncxId = toc;
+                        } else if ("itemref".equals(name)) {
+                            String idref = p.getAttributeValue(null, "idref");
+                            if (idref != null) spineRefs.add(idref);
+                        }
+                    }
+                    ev = p.next();
+                }
+            }
+
+            for (String idref : spineRefs) {
+                String href = null;
+                for (Item it : manifest) {
+                    if (idref.equals(it.id)) { href = it.href; break; }
+                }
+                if (href == null) continue;
+                EpubBook.Spine s = new EpubBook.Spine();
+                s.zipPath = resolve(opfDir, decodePercent(href));
+                book.spine.add(s);
+            }
+
+            String ncxHref = ncxHrefByType;
+            if (ncxHref == null && ncxId != null) {
+                for (Item it : manifest) {
+                    if (ncxId.equals(it.id)) { ncxHref = it.href; break; }
+                }
+            }
+            if (ncxHref != null) {
+                String ncxPath = resolve(opfDir, decodePercent(ncxHref));
+                ZipEntry ncx = findEntry(zip, ncxPath);
+                if (ncx != null) {
+                    parseNcx(zip.getInputStream(ncx), parentDir(ncxPath), book.toc);
+                }
+            }
+
+            for (EpubBook.Spine s : book.spine) {
+                for (EpubBook.Toc t : book.toc) {
+                    if (s.zipPath.equals(t.zipPath)) { s.title = t.title; break; }
+                }
+            }
+        }
+        return book;
+    }
+
+    private static void parseNcx(InputStream in, String ncxDir, List<EpubBook.Toc> out)
+            throws Exception {
+        try (InputStream src = in) {
+            XmlPullParser p = Xml.newPullParser();
+            p.setInput(src, null);
+            int depth = 0;
+            String pendingTitle = null;
+            int ev = p.getEventType();
+            while (ev != XmlPullParser.END_DOCUMENT) {
+                if (ev == XmlPullParser.START_TAG) {
+                    String name = local(p.getName());
+                    if ("navPoint".equals(name)) {
+                        depth++;
+                        pendingTitle = null;
+                    } else if ("text".equals(name) && depth > 0) {
+                        pendingTitle = trimToNull(safeText(p));
+                        ev = p.next();   // safeText 停在 </text>,前进并同步事件
+                        continue;
+                    } else if ("content".equals(name) && depth > 0) {
+                        String srcAttr = p.getAttributeValue(null, "src");
+                        if (srcAttr != null) {
+                            int hash = srcAttr.indexOf('#');
+                            if (hash >= 0) srcAttr = srcAttr.substring(0, hash);
+                            EpubBook.Toc t = new EpubBook.Toc();
+                            t.title = pendingTitle;
+                            t.zipPath = resolve(ncxDir, decodePercent(srcAttr));
+                            t.depth = depth - 1;
+                            out.add(t);
+                            pendingTitle = null;
+                        }
+                    }
+                } else if (ev == XmlPullParser.END_TAG) {
+                    if ("navPoint".equals(local(p.getName())) && depth > 0) depth--;
+                }
+                ev = p.next();
+            }
+        }
+    }
+
     private static final class Item {
         String id;
         String href;

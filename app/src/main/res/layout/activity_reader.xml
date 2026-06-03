@@ -1,0 +1,137 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/reader_bg">
+
+    <com.lwl.bookreader.ui.reader.ReaderWebView
+        android:id="@+id/web"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- 顶栏 -->
+    <LinearLayout
+        android:id="@+id/top_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="@color/white"
+        android:elevation="4dp"
+        android:fitsSystemWindows="true"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="4dp"
+        android:paddingVertical="6dp">
+
+        <ImageButton
+            android:id="@+id/btn_back"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/action_back"
+            android:src="@drawable/ic_back" />
+
+        <TextView
+            android:id="@+id/reader_title"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="8dp"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:textColor="@color/text_primary"
+            android:textSize="16sp" />
+
+        <ImageButton
+            android:id="@+id/btn_bookmark"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/reader_bookmark"
+            android:src="@drawable/ic_bookmark_border" />
+    </LinearLayout>
+
+    <!-- 底栏:进度条 + 工具栏 -->
+    <LinearLayout
+        android:id="@+id/bottom_bar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:background="@color/white"
+        android:elevation="4dp"
+        android:orientation="vertical"
+        android:paddingBottom="6dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="8dp">
+
+            <SeekBar
+                android:id="@+id/seek"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:max="1000" />
+
+            <TextView
+                android:id="@+id/progress_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:minWidth="56dp"
+                android:gravity="end"
+                android:textColor="@color/nav_unselected"
+                android:textSize="12sp"
+                tools:ignore="HardcodedText"
+                xmlns:tools="http://schemas.android.com/tools" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="6dp">
+
+            <LinearLayout
+                android:id="@+id/tool_toc"
+                style="@style/ReaderToolItem">
+
+                <ImageView style="@style/ReaderToolIcon" android:src="@drawable/ic_toc" />
+
+                <TextView style="@style/ReaderToolText" android:text="@string/reader_toc" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/tool_note"
+                style="@style/ReaderToolItem">
+
+                <ImageView style="@style/ReaderToolIcon" android:src="@drawable/ic_note" />
+
+                <TextView style="@style/ReaderToolText" android:text="@string/reader_note" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/tool_bookmark"
+                style="@style/ReaderToolItem">
+
+                <ImageView style="@style/ReaderToolIcon" android:src="@drawable/ic_bookmark_border" />
+
+                <TextView style="@style/ReaderToolText" android:text="@string/reader_bookmark" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/tool_settings"
+                style="@style/ReaderToolItem">
+
+                <ImageView style="@style/ReaderToolIcon" android:src="@drawable/ic_settings" />
+
+                <TextView style="@style/ReaderToolText" android:text="@string/reader_settings" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+
+</FrameLayout>

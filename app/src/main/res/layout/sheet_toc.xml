@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_sheet_top"
+    android:orientation="vertical">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingVertical="14dp"
+        android:text="@string/reader_toc"
+        android:textColor="@color/text_primary"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <View style="@style/ImportSheetDivider" />
+
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/toc_list"
+        android:layout_width="match_parent"
+        android:layout_height="520dp"
+        android:scrollbars="vertical" />
+</LinearLayout>

@@ -31,4 +31,17 @@
     <string name="import_coming_soon">该功能敬请期待</string>
     <string name="import_success">已导入《%1$s》</string>
     <string name="import_failed">导入失败:%1$s</string>
+
+    <!-- 阅读页 -->
+    <string name="action_back">返回</string>
+    <string name="reader_toc">目录</string>
+    <string name="reader_note">笔记</string>
+    <string name="reader_bookmark">书签</string>
+    <string name="reader_settings">设置</string>
+    <string name="reader_open_failed">打开失败:%1$s</string>
+    <string name="reader_unsupported">暂不支持该格式</string>
+    <string name="reader_empty_book">未解析到正文内容</string>
+    <string name="reader_coming_soon">该功能敬请期待</string>
+    <string name="reader_no_toc">该书没有目录</string>
+    <string name="reader_chapter_n">第 %1$d 章</string>
 </resources>

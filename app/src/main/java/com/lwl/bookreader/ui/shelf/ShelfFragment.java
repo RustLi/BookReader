@@ -1,5 +1,6 @@
 package com.lwl.bookreader.ui.shelf;
 
+import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
@@ -53,7 +54,10 @@ public class ShelfFragment extends Fragment {
         adapter = new BookAdapter(new BookAdapter.OnBookAction() {
             @Override
             public void onClick(Book book) {
-                // task-05 接入阅读页;此处暂不处理
+                Intent intent = new Intent(requireContext(),
+                        com.lwl.bookreader.ui.reader.ReaderActivity.class);
+                intent.putExtra(com.lwl.bookreader.ui.reader.ReaderActivity.EXTRA_BOOK_ID, book.id);
+                startActivity(intent);
             }
 
             @Override
