@@ -1,5 +1,6 @@
 package com.lwl.bookreader.ui.reader;
 
+import android.annotation.SuppressLint;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -7,6 +8,7 @@ import android.os.Looper;
 import android.view.GestureDetector;
 import android.view.MotionEvent;
 import android.view.View;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -28,6 +30,8 @@ import com.lwl.bookreader.data.epub.EpubExtractor;
 import com.lwl.bookreader.data.epub.EpubParser;
 import com.lwl.bookreader.data.mobi.MobiParser;
 import com.lwl.bookreader.databinding.ActivityReaderBinding;
+
+import org.json.JSONArray;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -55,6 +59,37 @@ public class ReaderActivity extends AppCompatActivity {
     private float pendingScrollFraction;
     private boolean userSeeking;
 
+    private TtsManager tts;
+    private boolean ttsWanted;          // 用户希望朗读(用于切章自动续读)
+    private boolean ttsPrepared;        // 当前章节已注入分句脚本
+
+    /** 注入脚本:把正文按句包成 span,回传句子数组,并提供高亮函数。 */
+    private static final String TTS_SCRIPT =
+            "(function(){try{"
+            + "if(window.__ttsReady){return;}"
+            + "var idx=0,sentences=[];"
+            + "var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null,false);"
+            + "var ns=[];while(w.nextNode()){ns.push(w.currentNode);}"
+            + "ns.forEach(function(n){var t=n.nodeValue;"
+            + "if(!t||!t.replace(/\\s/g,'').length){return;}"
+            + "var parts=t.match(/[^。！？!?；…\\n]+[。！？!?；…]?|\\n+/g);"
+            + "if(!parts){return;}var frag=document.createDocumentFragment();"
+            + "parts.forEach(function(p){"
+            + "if(!p.replace(/\\s/g,'').length){frag.appendChild(document.createTextNode(p));return;}"
+            + "var s=document.createElement('span');s.className='ttsseg';"
+            + "s.setAttribute('data-i',idx);s.textContent=p;frag.appendChild(s);"
+            + "sentences.push(p.replace(/\\s+/g,' ').trim());idx++;});"
+            + "if(n.parentNode){n.parentNode.replaceChild(frag,n);}});"
+            + "var st=document.createElement('style');"
+            + "st.textContent='.ttshl{background:#FFE08A;border-radius:3px;}';"
+            + "document.head.appendChild(st);window.__ttsReady=true;"
+            + "window.__ttsHighlight=function(i){var pv=document.querySelector('.ttshl');"
+            + "if(pv){pv.classList.remove('ttshl');}"
+            + "var el=document.querySelector('.ttsseg[data-i=\"'+i+'\"]');"
+            + "if(el){el.classList.add('ttshl');el.scrollIntoView({block:'center'});}};"
+            + "Android.onSentences(JSON.stringify(sentences));"
+            + "}catch(e){Android.onSentences('[]');}})();";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -69,14 +104,15 @@ public class ReaderActivity extends AppCompatActivity {
         loadBook(id);
     }
 
-    @SuppressWarnings("ClickableViewAccessibility")
+    @SuppressLint({"ClickableViewAccessibility", "SetJavaScriptEnabled"})
     private void setupWebView() {
         WebSettings ws = binding.web.getSettings();
         ws.setAllowFileAccess(true);
-        ws.setJavaScriptEnabled(false);
+        ws.setJavaScriptEnabled(true);       // 朗读高亮需要 JS
         ws.setDefaultTextEncodingName("UTF-8");
         ws.setUseWideViewPort(false);
         ws.setLoadWithOverviewMode(false);
+        binding.web.addJavascriptInterface(new TtsBridge(), "Android");
 
         binding.web.setWebViewClient(new WebViewClient() {
             @Override
@@ -85,6 +121,11 @@ public class ReaderActivity extends AppCompatActivity {
                     restorePending = false;
                     final float frac = pendingScrollFraction;
                     main.postDelayed(() -> applyScrollFraction(frac), 150);
+                }
+                ttsPrepared = false;
+                if (ttsWanted) {
+                    // 切章后自动续读:重新注入分句脚本
+                    main.postDelayed(() -> binding.web.evaluateJavascript(TTS_SCRIPT, null), 200);
                 }
                 updateProgressUi();
             }
@@ -118,6 +159,7 @@ public class ReaderActivity extends AppCompatActivity {
 
     private void setupControls() {
         binding.btnBack.setOnClickListener(v -> finish());
+        binding.btnTts.setOnClickListener(v -> toggleTts());
         binding.btnBookmark.setOnClickListener(v -> comingSoon());
         binding.toolToc.setOnClickListener(v -> showToc());
         binding.toolNote.setOnClickListener(v -> comingSoon());
@@ -294,6 +336,106 @@ public class ReaderActivity extends AppCompatActivity {
         Toast.makeText(this, R.string.reader_coming_soon, Toast.LENGTH_SHORT).show();
     }
 
+    // ---- 语音朗读 ----
+
+    private void toggleTts() {
+        if (epub == null) return;
+        if (tts != null && tts.isPlaying()) {
+            ttsWanted = false;
+            tts.pause();
+            updateTtsIcon();
+            return;
+        }
+        ttsWanted = true;
+        updateTtsIcon();
+        if (tts == null) {
+            tts = new TtsManager(this, ttsCallback);   // onReady 后自动开始
+        } else {
+            startTtsForCurrentChapter();
+        }
+    }
+
+    private void startTtsForCurrentChapter() {
+        if (tts == null || !tts.isReady()) return;
+        if (ttsPrepared && tts.hasSegments()) {
+            tts.resume();
+        } else {
+            binding.web.evaluateJavascript(TTS_SCRIPT, null);   // 回调 onSentences 后开始
+        }
+    }
+
+    private void updateTtsIcon() {
+        binding.btnTts.setImageResource(ttsWanted ? R.drawable.ic_pause : R.drawable.ic_play);
+    }
+
+    private final TtsManager.Callback ttsCallback = new TtsManager.Callback() {
+        @Override
+        public void onReady(boolean ok) {
+            if (!ok) {
+                ttsWanted = false;
+                updateTtsIcon();
+                Toast.makeText(ReaderActivity.this,
+                        R.string.reader_tts_init_failed, Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (ttsWanted) startTtsForCurrentChapter();
+        }
+
+        @Override
+        public void onSegmentStart(int index) {
+            binding.web.evaluateJavascript(
+                    "window.__ttsHighlight&&window.__ttsHighlight(" + index + ")", null);
+        }
+
+        @Override
+        public void onChapterFinished() {
+            if (epub != null && currentChapter + 1 < epub.spine.size()) {
+                restorePending = false;
+                loadChapter(currentChapter + 1);   // onPageFinished 因 ttsWanted 会重新注入并续读
+            } else {
+                ttsWanted = false;
+                updateTtsIcon();
+                Toast.makeText(ReaderActivity.this,
+                        R.string.reader_tts_finished, Toast.LENGTH_SHORT).show();
+            }
+        }
+    };
+
+    /** 供注入脚本回传分句结果。 */
+    private class TtsBridge {
+        @JavascriptInterface
+        public void onSentences(String json) {
+            final List<String> segs = new ArrayList<>();
+            try {
+                JSONArray arr = new JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    String s = arr.optString(i, "").trim();
+                    if (!s.isEmpty()) segs.add(s);
+                }
+            } catch (Exception ignored) {
+            }
+            main.post(() -> {
+                ttsPrepared = true;
+                if (tts == null) return;
+                if (segs.isEmpty()) {
+                    // 本章无文字(如纯封面页):自动跳下一章续读
+                    if (ttsWanted && epub != null && currentChapter + 1 < epub.spine.size()) {
+                        restorePending = false;
+                        loadChapter(currentChapter + 1);
+                    } else if (ttsWanted) {
+                        ttsWanted = false;
+                        updateTtsIcon();
+                        Toast.makeText(ReaderActivity.this,
+                                R.string.reader_tts_no_text, Toast.LENGTH_SHORT).show();
+                    }
+                    return;
+                }
+                tts.setSegments(segs);
+                if (ttsWanted) tts.playFrom(0);
+            });
+        }
+    }
+
     private void saveProgress() {
         if (book == null || epub == null) return;
         book.chapterIndex = currentChapter;
@@ -313,6 +455,20 @@ public class ReaderActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         saveProgress();
+        if (tts != null && tts.isPlaying()) {
+            ttsWanted = false;
+            tts.pause();
+            updateTtsIcon();
+        }
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (tts != null) {
+            tts.shutdown();
+            tts = null;
+        }
     }
 
     private static int clamp(int v, int lo, int hi) {

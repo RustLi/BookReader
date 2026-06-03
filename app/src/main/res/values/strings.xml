@@ -44,4 +44,8 @@
     <string name="reader_coming_soon">该功能敬请期待</string>
     <string name="reader_no_toc">该书没有目录</string>
     <string name="reader_chapter_n">第 %1$d 章</string>
+    <string name="reader_tts">朗读</string>
+    <string name="reader_tts_init_failed">语音引擎初始化失败,请检查系统 TTS</string>
+    <string name="reader_tts_finished">已读完全书</string>
+    <string name="reader_tts_no_text">本章没有可朗读的文字</string>
 </resources>
