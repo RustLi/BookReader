@@ -18,11 +18,9 @@ import androidx.appcompat.app.AlertDialog;
 import androidx.fragment.app.Fragment;
 import androidx.lifecycle.ViewModelProvider;
 
-import com.google.android.material.bottomsheet.BottomSheetDialog;
 import com.lwl.bookreader.R;
 import com.lwl.bookreader.data.Book;
 import com.lwl.bookreader.databinding.FragmentShelfBinding;
-import com.lwl.bookreader.databinding.SheetImportBinding;
 
 /** 书架 Tab(图 01 / 02):网格展示书籍,支持导入、筛选与删除。 */
 public class ShelfFragment extends Fragment {
@@ -82,7 +80,7 @@ public class ShelfFragment extends Fragment {
             }
         });
 
-        binding.btnAdd.setOnClickListener(v -> showImportSheet());
+        binding.btnAdd.setOnClickListener(v -> openDocLauncher.launch(new String[]{"*/*"}));
 
         viewModel.getBooks().observe(getViewLifecycleOwner(), books -> {
             adapter.submitList(books);
@@ -92,32 +90,6 @@ public class ShelfFragment extends Fragment {
 
         viewModel.getToast().observe(getViewLifecycleOwner(),
                 msg -> Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show());
-    }
-
-    private void showImportSheet() {
-        BottomSheetDialog dialog = new BottomSheetDialog(requireContext());
-        SheetImportBinding sheet = SheetImportBinding.inflate(getLayoutInflater());
-        dialog.setContentView(sheet.getRoot());
-
-        sheet.sheetOnline.setOnClickListener(v -> {
-            comingSoon();
-            dialog.dismiss();
-        });
-        sheet.sheetWifi.setOnClickListener(v -> {
-            comingSoon();
-            dialog.dismiss();
-        });
-        sheet.sheetLocal.setOnClickListener(v -> {
-            dialog.dismiss();
-            openDocLauncher.launch(new String[]{"*/*"});
-        });
-        sheet.sheetCancel.setOnClickListener(v -> dialog.dismiss());
-
-        dialog.show();
-    }
-
-    private void comingSoon() {
-        Toast.makeText(requireContext(), R.string.import_coming_soon, Toast.LENGTH_SHORT).show();
     }
 
     private void confirmDelete(Book book) {

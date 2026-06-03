@@ -21,11 +21,7 @@
     <string name="action_delete">删除</string>
     <string name="action_cancel">取消</string>
 
-    <!-- 导入弹窗 -->
-    <string name="import_online">在线传书</string>
-    <string name="import_wifi">WIFI传书</string>
-    <string name="import_local">导入本地图书</string>
-    <string name="import_coming_soon">该功能敬请期待</string>
+    <!-- 导入 -->
     <string name="import_success">已导入《%1$s》</string>
     <string name="import_failed">导入失败:%1$s</string>
 
