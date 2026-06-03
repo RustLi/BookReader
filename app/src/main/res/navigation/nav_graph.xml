@@ -12,17 +12,5 @@
         android:id="@+id/shelfFragment"
         android:name="com.lwl.bookreader.ui.shelf.ShelfFragment"
         android:label="@string/tab_shelf" />
-    <fragment
-        android:id="@+id/cloudFragment"
-        android:name="com.lwl.bookreader.ui.cloud.CloudFragment"
-        android:label="@string/tab_cloud" />
-    <fragment
-        android:id="@+id/vipFragment"
-        android:name="com.lwl.bookreader.ui.vip.VipFragment"
-        android:label="@string/tab_vip" />
-    <fragment
-        android:id="@+id/accountFragment"
-        android:name="com.lwl.bookreader.ui.account.AccountFragment"
-        android:label="@string/tab_account" />
 
 </navigation>

@@ -3,9 +3,6 @@
     <string name="app_name">书阅</string>
     <string name="tab_reading">阅读中</string>
     <string name="tab_shelf">书架</string>
-    <string name="tab_cloud">云端</string>
-    <string name="tab_vip">会员</string>
-    <string name="tab_account">账号</string>
 
     <!-- 书架 -->
     <string name="shelf_title">书架</string>
