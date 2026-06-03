@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_sheet_top"
+    android:orientation="vertical"
+    android:paddingHorizontal="18dp"
+    android:paddingTop="18dp"
+    android:paddingBottom="24dp">
+
+    <!-- 亮度 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            style="@style/SettingLabel"
+            android:text="@string/setting_brightness" />
+
+        <SeekBar
+            android:id="@+id/seek_brightness"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:max="100" />
+    </LinearLayout>
+
+    <!-- 字号 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            style="@style/SettingLabel"
+            android:text="@string/setting_font" />
+
+        <Button
+            android:id="@+id/btn_font_minus"
+            style="@style/SettingPill"
+            android:text="@string/setting_font_minus" />
+
+        <TextView
+            android:id="@+id/tv_font"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:textColor="@color/text_primary"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/btn_font_plus"
+            style="@style/SettingPill"
+            android:text="@string/setting_font_plus" />
+    </LinearLayout>
+
+    <!-- 行距 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            style="@style/SettingLabel"
+            android:text="@string/setting_linespacing" />
+
+        <LinearLayout
+            android:id="@+id/line_container"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="horizontal" />
+    </LinearLayout>
+
+    <!-- 背景 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <TextView
+            style="@style/SettingLabel"
+            android:text="@string/setting_theme" />
+
+        <LinearLayout
+            android:id="@+id/theme_container"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="horizontal" />
+    </LinearLayout>
+
+</LinearLayout>

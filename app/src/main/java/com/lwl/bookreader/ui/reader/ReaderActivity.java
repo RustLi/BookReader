@@ -6,13 +6,17 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.GestureDetector;
+import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.LinearLayout;
 import android.widget.SeekBar;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -25,6 +29,9 @@ import com.lwl.bookreader.R;
 import com.lwl.bookreader.data.AppDatabase;
 import com.lwl.bookreader.data.Book;
 import com.lwl.bookreader.data.BookRepository;
+import com.lwl.bookreader.data.Bookmark;
+import com.lwl.bookreader.data.Note;
+import com.lwl.bookreader.util.TimeFormat;
 import com.lwl.bookreader.data.epub.EpubBook;
 import com.lwl.bookreader.data.epub.EpubExtractor;
 import com.lwl.bookreader.data.epub.EpubParser;
@@ -46,6 +53,7 @@ public class ReaderActivity extends AppCompatActivity {
 
     private ActivityReaderBinding binding;
     private final ExecutorService io = Executors.newSingleThreadExecutor();
+    private final ExecutorService dbExec = Executors.newSingleThreadExecutor();
     private final Handler main = new Handler(Looper.getMainLooper());
     private BookRepository repository;
 
@@ -62,6 +70,8 @@ public class ReaderActivity extends AppCompatActivity {
     private TtsManager tts;
     private boolean ttsWanted;          // 用户希望朗读(用于切章自动续读)
     private boolean ttsPrepared;        // 当前章节已注入分句脚本
+
+    private ReaderPrefs prefs;
 
     /** 注入脚本:把正文按句包成 span,回传句子数组,并提供高亮函数。 */
     private static final String TTS_SCRIPT =
@@ -96,9 +106,12 @@ public class ReaderActivity extends AppCompatActivity {
         binding = ActivityReaderBinding.inflate(getLayoutInflater());
         setContentView(binding.getRoot());
         repository = new BookRepository(this);
+        prefs = new ReaderPrefs(this);
 
         setupWebView();
         setupControls();
+        applyBrightness();
+        applyThemeChrome();
 
         long id = getIntent().getLongExtra(EXTRA_BOOK_ID, -1);
         loadBook(id);
@@ -112,11 +125,14 @@ public class ReaderActivity extends AppCompatActivity {
         ws.setDefaultTextEncodingName("UTF-8");
         ws.setUseWideViewPort(false);
         ws.setLoadWithOverviewMode(false);
+        ws.setTextZoom(prefs.getFontZoom());
+        binding.web.setBackgroundColor(prefs.bgColor());
         binding.web.addJavascriptInterface(new TtsBridge(), "Android");
 
         binding.web.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageFinished(WebView view, String url) {
+                injectReaderCss();
                 if (restorePending) {
                     restorePending = false;
                     final float frac = pendingScrollFraction;
@@ -160,11 +176,11 @@ public class ReaderActivity extends AppCompatActivity {
     private void setupControls() {
         binding.btnBack.setOnClickListener(v -> finish());
         binding.btnTts.setOnClickListener(v -> toggleTts());
-        binding.btnBookmark.setOnClickListener(v -> comingSoon());
+        binding.btnBookmark.setOnClickListener(v -> addBookmark());
         binding.toolToc.setOnClickListener(v -> showToc());
-        binding.toolNote.setOnClickListener(v -> comingSoon());
-        binding.toolBookmark.setOnClickListener(v -> comingSoon());
-        binding.toolSettings.setOnClickListener(v -> comingSoon());
+        binding.toolNote.setOnClickListener(v -> handleNote());
+        binding.toolBookmark.setOnClickListener(v -> showBookmarks());
+        binding.toolSettings.setOnClickListener(v -> showSettings());
 
         binding.seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
@@ -332,8 +348,274 @@ public class ReaderActivity extends AppCompatActivity {
         }
     }
 
-    private void comingSoon() {
-        Toast.makeText(this, R.string.reader_coming_soon, Toast.LENGTH_SHORT).show();
+    // ---- 阅读设置 ----
+
+    private void applyBrightness() {
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        float b = prefs.getBrightness();
+        lp.screenBrightness = b < 0 ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE : b;
+        getWindow().setAttributes(lp);
+    }
+
+    /** 应用主题底色到页面外壳(根布局 + WebView 背景)。 */
+    private void applyThemeChrome() {
+        binding.getRoot().setBackgroundColor(prefs.bgColor());
+        binding.web.setBackgroundColor(prefs.bgColor());
+    }
+
+    /** 注入主题色 / 行距 CSS。 */
+    private void injectReaderCss() {
+        String bg = hex(prefs.bgColor());
+        String fg = hex(prefs.textColor());
+        float lh = prefs.lineHeight();
+        String css = "html,body{background:" + bg + " !important;color:" + fg
+                + " !important;line-height:" + lh + " !important;}"
+                + "a{color:#3F8CFF !important;}img{max-width:100% !important;height:auto !important;}";
+        String js = "(function(){var id='__readercss';var s=document.getElementById(id);"
+                + "if(!s){s=document.createElement('style');s.id=id;"
+                + "(document.head||document.documentElement).appendChild(s);}"
+                + "s.textContent=" + jsString(css) + ";})()";
+        binding.web.evaluateJavascript(js, null);
+    }
+
+    private void showSettings() {
+        BottomSheetDialog dialog = new BottomSheetDialog(this);
+        View v = LayoutInflater.from(this).inflate(R.layout.sheet_settings, null);
+
+        SeekBar brightness = v.findViewById(R.id.seek_brightness);
+        float b = prefs.getBrightness();
+        brightness.setProgress(b < 0 ? 60 : (int) (b * 100));
+        brightness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
+                if (u) { prefs.setBrightness(p / 100f); applyBrightness(); }
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) { }
+            @Override public void onStopTrackingTouch(SeekBar s) { }
+        });
+
+        TextView fontVal = v.findViewById(R.id.tv_font);
+        fontVal.setText(prefs.getFontZoom() + "%");
+        v.findViewById(R.id.btn_font_minus).setOnClickListener(x -> {
+            prefs.setFontZoom(prefs.getFontZoom() - 10);
+            binding.web.getSettings().setTextZoom(prefs.getFontZoom());
+            fontVal.setText(prefs.getFontZoom() + "%");
+        });
+        v.findViewById(R.id.btn_font_plus).setOnClickListener(x -> {
+            prefs.setFontZoom(prefs.getFontZoom() + 10);
+            binding.web.getSettings().setTextZoom(prefs.getFontZoom());
+            fontVal.setText(prefs.getFontZoom() + "%");
+        });
+
+        buildLineSpacingOptions(v.findViewById(R.id.line_container));
+        buildThemeOptions(v.findViewById(R.id.theme_container));
+
+        dialog.setContentView(v);
+        dialog.show();
+    }
+
+    private void buildLineSpacingOptions(LinearLayout container) {
+        container.removeAllViews();
+        String[] labels = {getString(R.string.ls_small), getString(R.string.ls_mid),
+                getString(R.string.ls_large), getString(R.string.ls_xlarge)};
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            com.google.android.material.button.MaterialButton btn =
+                    new com.google.android.material.button.MaterialButton(this, null,
+                            com.google.android.material.R.attr.materialButtonOutlinedStyle);
+            btn.setText(labels[i]);
+            btn.setAllCaps(false);
+            btn.setMinWidth(0);
+            btn.setMinimumWidth(0);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
+                    (int) (40 * getResources().getDisplayMetrics().density), 1f);
+            lp.setMarginEnd(8);
+            btn.setLayoutParams(lp);
+            btn.setInsetTop(0);
+            btn.setInsetBottom(0);
+            if (idx == prefs.getLineSpacing()) {
+                btn.setBackgroundColor(0x223F8CFF);
+            }
+            btn.setOnClickListener(x -> {
+                prefs.setLineSpacing(idx);
+                injectReaderCss();
+                buildLineSpacingOptions(container);
+            });
+            container.addView(btn);
+        }
+    }
+
+    private void buildThemeOptions(LinearLayout container) {
+        container.removeAllViews();
+        int size = (int) (40 * getResources().getDisplayMetrics().density);
+        for (int i = 0; i < ReaderPrefs.THEME_BG.length; i++) {
+            final int idx = i;
+            View sw = new View(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(size, size);
+            lp.setMarginEnd((int) (12 * getResources().getDisplayMetrics().density));
+            sw.setLayoutParams(lp);
+            android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+            d.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+            d.setColor(ReaderPrefs.THEME_BG[i]);
+            d.setStroke((int) ((idx == prefs.getTheme() ? 3 : 1)
+                    * getResources().getDisplayMetrics().density),
+                    idx == prefs.getTheme() ? 0xFF3F8CFF : 0xFFCCCCCC);
+            sw.setBackground(d);
+            sw.setOnClickListener(x -> {
+                prefs.setTheme(idx);
+                applyThemeChrome();
+                injectReaderCss();
+                buildThemeOptions(container);
+            });
+            container.addView(sw);
+        }
+    }
+
+    // ---- 书签 / 笔记 ----
+
+    private void addBookmark() {
+        if (book == null) return;
+        evalForString(
+                "(function(){try{var el=document.elementFromPoint(8,8);"
+                + "var t=(el?el.innerText:'')||document.body.innerText||'';"
+                + "return t.replace(/\\s+/g,' ').trim().substring(0,40);}catch(e){return '';}})()",
+                snippet -> {
+                    Bookmark bm = new Bookmark();
+                    bm.bookId = book.id;
+                    bm.chapterIndex = currentChapter;
+                    bm.chapterProgress = scrollFraction();
+                    bm.snippet = snippet.isEmpty() ? book.title : snippet;
+                    bm.createTime = System.currentTimeMillis();
+                    dbExec.execute(() -> AppDatabase.getInstance(this).bookmarkDao().insert(bm));
+                    Toast.makeText(this, R.string.bookmark_added, Toast.LENGTH_SHORT).show();
+                });
+    }
+
+    private void showBookmarks() {
+        if (book == null) return;
+        dbExec.execute(() -> {
+            List<Bookmark> list = AppDatabase.getInstance(this).bookmarkDao().listByBook(book.id);
+            main.post(() -> {
+                List<MarkAdapter.Row> rows = new ArrayList<>();
+                for (Bookmark bm : list) {
+                    rows.add(new MarkAdapter.Row(bm.snippet,
+                            TimeFormat.relative(this, bm.createTime),
+                            bm.chapterIndex, bm.chapterProgress, bm));
+                }
+                showMarksSheet(getString(R.string.reader_bookmark),
+                        getString(R.string.bookmark_empty), rows,
+                        ref -> dbExec.execute(() ->
+                                AppDatabase.getInstance(this).bookmarkDao().delete((Bookmark) ref)));
+            });
+        });
+    }
+
+    private void handleNote() {
+        if (book == null) return;
+        evalForString(
+                "(function(){try{return (window.getSelection?window.getSelection().toString():'')"
+                + ".replace(/\\s+/g,' ').trim();}catch(e){return '';}})()",
+                sel -> {
+                    if (!sel.isEmpty()) {
+                        Note n = new Note();
+                        n.bookId = book.id;
+                        n.chapterIndex = currentChapter;
+                        n.chapterProgress = scrollFraction();
+                        n.text = sel;
+                        n.createTime = System.currentTimeMillis();
+                        dbExec.execute(() -> AppDatabase.getInstance(this).noteDao().insert(n));
+                        Toast.makeText(this, R.string.note_added, Toast.LENGTH_SHORT).show();
+                    } else {
+                        showNotes();
+                    }
+                });
+    }
+
+    private void showNotes() {
+        if (book == null) return;
+        dbExec.execute(() -> {
+            List<Note> list = AppDatabase.getInstance(this).noteDao().listByBook(book.id);
+            main.post(() -> {
+                List<MarkAdapter.Row> rows = new ArrayList<>();
+                for (Note n : list) {
+                    rows.add(new MarkAdapter.Row(n.text,
+                            TimeFormat.relative(this, n.createTime),
+                            n.chapterIndex, n.chapterProgress, n));
+                }
+                showMarksSheet(getString(R.string.reader_note),
+                        getString(R.string.note_empty), rows,
+                        ref -> dbExec.execute(() ->
+                                AppDatabase.getInstance(this).noteDao().delete((Note) ref)));
+                if (rows.isEmpty()) {
+                    Toast.makeText(this, R.string.note_select_first, Toast.LENGTH_SHORT).show();
+                }
+            });
+        });
+    }
+
+    private interface DeleteRef {
+        void delete(Object ref);
+    }
+
+    private void showMarksSheet(String title, String empty,
+                                List<MarkAdapter.Row> rows, DeleteRef onDelete) {
+        BottomSheetDialog dialog = new BottomSheetDialog(this);
+        View v = LayoutInflater.from(this).inflate(R.layout.sheet_marks, null);
+        ((TextView) v.findViewById(R.id.marks_title)).setText(title);
+        TextView emptyView = v.findViewById(R.id.marks_empty);
+        androidx.recyclerview.widget.RecyclerView list = v.findViewById(R.id.marks_list);
+        emptyView.setText(empty);
+        emptyView.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
+        list.setLayoutManager(new androidx.recyclerview.widget.LinearLayoutManager(this));
+        list.setAdapter(new MarkAdapter(rows, new MarkAdapter.Listener() {
+            @Override
+            public void onClick(MarkAdapter.Row row) {
+                jumpTo(row.chapterIndex, row.chapterProgress);
+                dialog.dismiss();
+            }
+
+            @Override
+            public void onLongClick(MarkAdapter.Row row) {
+                onDelete.delete(row.ref);
+                rows.remove(row);
+                list.getAdapter().notifyDataSetChanged();
+                emptyView.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
+                Toast.makeText(ReaderActivity.this, R.string.mark_deleted, Toast.LENGTH_SHORT).show();
+            }
+        }));
+        dialog.setContentView(v);
+        dialog.show();
+    }
+
+    private void jumpTo(int chapterIndex, float progress) {
+        restorePending = true;
+        pendingScrollFraction = progress;
+        loadChapter(chapterIndex);
+    }
+
+    private void evalForString(String js, ValueConsumer consumer) {
+        binding.web.evaluateJavascript(js, value -> consumer.accept(unquote(value)));
+    }
+
+    private interface ValueConsumer {
+        void accept(String value);
+    }
+
+    private static String unquote(String jsonStringValue) {
+        if (jsonStringValue == null || "null".equals(jsonStringValue)) return "";
+        try {
+            Object o = new org.json.JSONTokener(jsonStringValue).nextValue();
+            return o == null ? "" : o.toString();
+        } catch (Exception e) {
+            return jsonStringValue;
+        }
+    }
+
+    private static String hex(int color) {
+        return String.format("#%06X", 0xFFFFFF & color);
+    }
+
+    private static String jsString(String s) {
+        return org.json.JSONObject.quote(s);
     }
 
     // ---- 语音朗读 ----

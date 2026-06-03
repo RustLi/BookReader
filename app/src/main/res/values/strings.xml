@@ -58,4 +58,23 @@
     <string name="time_just">刚刚</string>
     <string name="time_hours">%1$d小时前</string>
     <string name="time_days">%1$d天前</string>
+
+    <!-- 阅读设置 / 书签 / 笔记 -->
+    <string name="setting_brightness">亮度</string>
+    <string name="setting_font">字号</string>
+    <string name="setting_font_minus">A-</string>
+    <string name="setting_font_plus">A+</string>
+    <string name="setting_linespacing">行距</string>
+    <string name="setting_theme">背景</string>
+    <string name="ls_small">小</string>
+    <string name="ls_mid">中</string>
+    <string name="ls_large">大</string>
+    <string name="ls_xlarge">超大</string>
+    <string name="bookmark_added">已添加书签</string>
+    <string name="bookmark_empty">还没有书签</string>
+    <string name="note_added">已添加笔记</string>
+    <string name="note_empty">还没有笔记</string>
+    <string name="note_select_first">请先在正文中选择文字,再点笔记</string>
+    <string name="mark_deleted">已删除</string>
+    <string name="mark_delete_hint">长按可删除</string>
 </resources>
