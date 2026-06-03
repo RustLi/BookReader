@@ -48,4 +48,14 @@
     <string name="reader_tts_init_failed">语音引擎初始化失败,请检查系统 TTS</string>
     <string name="reader_tts_finished">已读完全书</string>
     <string name="reader_tts_no_text">本章没有可朗读的文字</string>
+
+    <!-- 阅读中首页 -->
+    <string name="reading_title">阅读中</string>
+    <string name="reading_continue">继续</string>
+    <string name="reading_recent">最近读过</string>
+    <string name="reading_empty">还没有阅读记录,去书架翻开一本书吧</string>
+    <string name="reading_note">说明:如果你无法看到在其他设备上阅读的图书信息,请确保你之前阅读的图书已经上传到云端,只有保存在云端的图书,阅读数据才能进行云端同步。</string>
+    <string name="time_just">刚刚</string>
+    <string name="time_hours">%1$d小时前</string>
+    <string name="time_days">%1$d天前</string>
 </resources>

@@ -22,6 +22,10 @@ public class BookRepository {
         return bookDao.search("%" + (keyword == null ? "" : keyword) + "%");
     }
 
+    public LiveData<List<Book>> getRecentlyRead() {
+        return bookDao.getRecentlyRead();
+    }
+
     public void insert(Book book) {
         ioExecutor.execute(() -> bookDao.insert(book));
     }

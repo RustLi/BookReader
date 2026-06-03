@@ -29,6 +29,10 @@ public interface BookDao {
     @Query("SELECT * FROM book ORDER BY lastReadTime DESC, addTime DESC")
     LiveData<List<Book>> getAll();
 
+    /** 读过的书(lastReadTime>0),最近阅读优先。 */
+    @Query("SELECT * FROM book WHERE lastReadTime > 0 ORDER BY lastReadTime DESC")
+    LiveData<List<Book>> getRecentlyRead();
+
     @Query("SELECT * FROM book WHERE id = :id")
     Book findById(long id);
 }
