@@ -26,6 +26,7 @@ import com.lwl.bookreader.data.BookRepository;
 import com.lwl.bookreader.data.epub.EpubBook;
 import com.lwl.bookreader.data.epub.EpubExtractor;
 import com.lwl.bookreader.data.epub.EpubParser;
+import com.lwl.bookreader.data.mobi.MobiParser;
 import com.lwl.bookreader.databinding.ActivityReaderBinding;
 
 import java.io.File;
@@ -152,14 +153,18 @@ public class ReaderActivity extends AppCompatActivity {
                     finishWithToast(getString(R.string.reader_open_failed, "not found"));
                     return;
                 }
-                if (!"epub".equalsIgnoreCase(b.format)) {
+                File bookFile = new File(b.filePath);
+                File dir = new File(getCacheDir(), "reader/" + id);
+                EpubBook eb;
+                if ("mobi".equalsIgnoreCase(b.format)) {
+                    eb = MobiParser.openForReading(bookFile, dir);
+                } else if ("epub".equalsIgnoreCase(b.format)) {
+                    EpubExtractor.extract(bookFile, dir);
+                    eb = EpubParser.openForReading(bookFile);
+                } else {
                     finishWithToast(getString(R.string.reader_unsupported));
                     return;
                 }
-                File epubFile = new File(b.filePath);
-                File dir = new File(getCacheDir(), "reader/" + id);
-                EpubExtractor.extract(epubFile, dir);
-                EpubBook eb = EpubParser.openForReading(epubFile);
                 if (eb.spine.isEmpty()) {
                     finishWithToast(getString(R.string.reader_empty_book));
                     return;

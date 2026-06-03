@@ -10,6 +10,7 @@ import android.text.TextUtils;
 
 import com.lwl.bookreader.data.epub.EpubMeta;
 import com.lwl.bookreader.data.epub.EpubParser;
+import com.lwl.bookreader.data.mobi.MobiParser;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -44,6 +45,7 @@ public class BookImporter {
             try {
                 String displayName = queryDisplayName(uri);
                 String id = UUID.randomUUID().toString();
+                String format = detectFormat(displayName);
 
                 File booksDir = new File(appContext.getFilesDir(), "books");
                 File coversDir = new File(appContext.getFilesDir(), "covers");
@@ -52,10 +54,12 @@ public class BookImporter {
                 //noinspection ResultOfMethodCallIgnored
                 coversDir.mkdirs();
 
-                bookFile = new File(booksDir, id + ".epub");
+                bookFile = new File(booksDir, id + "." + format);
                 copyUriToFile(uri, bookFile);
 
-                EpubMeta meta = EpubParser.parse(bookFile);
+                EpubMeta meta = "mobi".equals(format)
+                        ? MobiParser.parseMeta(bookFile)
+                        : EpubParser.parse(bookFile);
 
                 String title = !TextUtils.isEmpty(meta.title)
                         ? meta.title : stripExtension(displayName);
@@ -73,7 +77,7 @@ public class BookImporter {
                 Book book = new Book();
                 book.title = title;
                 book.author = meta.author;
-                book.format = "epub";
+                book.format = format;
                 book.filePath = bookFile.getAbsolutePath();
                 book.coverPath = coverPath;
                 book.addTime = System.currentTimeMillis();
@@ -113,6 +117,17 @@ public class BookImporter {
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    /** 依文件名后缀判断格式,默认 epub。 */
+    private static String detectFormat(String name) {
+        if (name != null) {
+            String lower = name.toLowerCase();
+            if (lower.endsWith(".mobi") || lower.endsWith(".azw") || lower.endsWith(".azw3")) {
+                return "mobi";
+            }
+        }
+        return "epub";
     }
 
     private static String stripExtension(String name) {
