@@ -80,6 +80,16 @@ public class ReaderActivity extends AppCompatActivity {
 
     private ReaderPrefs prefs;
 
+    /** 量取多栏分页后的真实页数（每页恰为一个视口宽），修正原生 horizontalRange 偏小的问题。 */
+    private static final String PAGINATION_MEASURE_JS =
+            "(function(){"
+            + "var de=document.documentElement,b=document.body;"
+            + "var pw=de.clientWidth||window.innerWidth||1;"
+            + "var cw=Math.max(de.scrollWidth,b?b.scrollWidth:0,de.offsetWidth,pw);"
+            + "var pages=Math.max(1,Math.round(cw/pw));"
+            + "return JSON.stringify({pages:pages,pageCss:pw,contentCss:cw});"
+            + "})()";
+
     /** 注入脚本:把正文按句包成 span,回传句子数组,并提供高亮函数。 */
     private static final String TTS_SCRIPT =
             "(function(){try{"
@@ -148,12 +158,12 @@ public class ReaderActivity extends AppCompatActivity {
                 if (restorePending) {
                     restorePending = false;
                     final float frac = pendingScrollFraction;
-                    main.postDelayed(() -> {
+                    schedulePaginationRefresh(() -> {
                         applyScrollFraction(frac);
                         updatePageInfo();
-                    }, 300);
+                    });
                 } else {
-                    main.postDelayed(ReaderActivity.this::updatePageInfo, 300);
+                    schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
                 }
                 ttsPrepared = false;
                 if (ttsWanted) {
@@ -267,6 +277,7 @@ public class ReaderActivity extends AppCompatActivity {
     private void loadChapter(int index) {
         if (epub == null) return;
         currentChapter = clamp(index, 0, epub.spine.size() - 1);
+        binding.web.clearMeasuredHorizontalRange();
         File f = new File(extractDir, epub.spine.get(currentChapter).zipPath);
         binding.web.loadUrl(Uri.fromFile(f).toString());
         updateProgressUi();
@@ -367,11 +378,20 @@ public class ReaderActivity extends AppCompatActivity {
     }
 
     private void turnPage(int delta) {
+        turnPage(delta, false);
+    }
+
+    private void turnPage(int delta, boolean remeasureTried) {
         if (epub == null) return;
         int pageW = binding.web.getWidth();
         if (pageW == 0) return;
         int scrollX = binding.web.getScrollX();
         int contentW = binding.web.horizontalRange();
+        if (contentW <= pageW + 10 && !remeasureTried) {
+            // 尚未量取到多栏总宽时先刷新，避免误判为章末直接切章
+            refreshPaginationMetrics(() -> turnPage(delta, true));
+            return;
+        }
         if (delta > 0) {
             if (scrollX + pageW >= contentW - 10) {
                 int target = currentChapter + 1;
@@ -464,44 +484,54 @@ public class ReaderActivity extends AppCompatActivity {
         String bg = hex(prefs.bgColor());
         String fg = hex(prefs.textColor());
         float lh = prefs.lineHeight();
-        // html 负责左右页边距；body 多栏横向分页
-        // 列高使用 Java 侧 WebView 物理高度（match_parent 全屏，系统栏显隐不影响此值）
-        String css = "html{overflow:hidden !important;height:100% !important;"
-                + "padding:0 5% !important;box-sizing:border-box !important;}"
+        // 关键：使用视口相对单位（vw/100% 高度），让每一页恰好等于一个视口宽。
+        // 列宽 90vw + 列间距 10vw => 列距 100vw，配合 body 左右 5vw 内边距，
+        // 每页都有 5vw 留白且页边界与 WebView 像素宽（getWidth）精确对齐，翻页步长稳定。
+        // 切勿用 getWidth()/getHeight() 的设备像素当 CSS px，否则只会排出一列、误判为整章一页。
+        String css = "html{overflow-x:visible !important;overflow-y:hidden !important;"
+                + "height:100% !important;margin:0 !important;padding:0 !important;"
+                + "box-sizing:border-box !important;}"
                 + "body{background:" + bg + " !important;color:" + fg + " !important;"
-                + "-webkit-column-width:100% !important;column-width:100% !important;"
-                + "-webkit-column-gap:0 !important;column-gap:0 !important;"
-                + "height:__H__ !important;overflow:hidden !important;"
+                + "-webkit-column-width:90vw !important;column-width:90vw !important;"
+                + "-webkit-column-gap:10vw !important;column-gap:10vw !important;"
+                + "height:100% !important;overflow-x:visible !important;overflow-y:hidden !important;"
                 // border-box：列高含上下内边距，避免内容被视口裁切；加大上下边距留出呼吸空间
                 + "box-sizing:border-box !important;"
-                + "padding:2.2em 0 !important;margin:0 !important;}"
+                + "padding:2.2em 5vw !important;margin:0 !important;}"
                 + "body,body *{line-height:" + lh + " !important;}"
                 + "body,body *{color:" + fg + " !important;}"
                 + "a{color:#3F8CFF !important;}"
                 + "img{max-width:100% !important;height:auto !important;}";
 
-        int webH = binding.web.getHeight();
-        String js;
-        if (webH > 0) {
-            // Java 侧高度稳定，直接替换，不走 JS 量取视口高度
-            String finalCss = css.replace("__H__", webH + "px");
-            js = "(function(){"
-                    + "var id='__readercss';var s=document.getElementById(id);"
-                    + "if(!s){s=document.createElement('style');s.id=id;"
-                    + "(document.head||document.documentElement).appendChild(s);}"
-                    + "s.textContent=" + jsString(finalCss) + ";"
-                    + "})()";
-        } else {
-            // 极少数情况 View 尚未测量，回退到 JS 量取
-            js = "(function(){"
-                    + "var h=(window.innerHeight||document.documentElement.clientHeight)+'px';"
-                    + "var id='__readercss';var s=document.getElementById(id);"
-                    + "if(!s){s=document.createElement('style');s.id=id;"
-                    + "(document.head||document.documentElement).appendChild(s);}"
-                    + "s.textContent=" + jsString(css) + ".replace('__H__',h);"
-                    + "})()";
-        }
-        binding.web.evaluateJavascript(js, null);
+        String js = "(function(){"
+                + "var id='__readercss';var s=document.getElementById(id);"
+                + "if(!s){s=document.createElement('style');s.id=id;"
+                + "(document.head||document.documentElement).appendChild(s);}"
+                + "s.textContent=" + jsString(css) + ";"
+                + "})()";
+        binding.web.evaluateJavascript(js, v -> schedulePaginationRefresh(null));
+    }
+
+    /** 分页 CSS 注入后延迟量取内容宽度（多栏 reflow 需要短暂等待）。 */
+    private void schedulePaginationRefresh(Runnable after) {
+        main.postDelayed(() -> refreshPaginationMetrics(null), 80);
+        main.postDelayed(() -> refreshPaginationMetrics(after), 320);
+    }
+
+    private void refreshPaginationMetrics(Runnable after) {
+        binding.web.evaluateJavascript(PAGINATION_MEASURE_JS, value -> main.post(() -> {
+            try {
+                org.json.JSONObject o = new org.json.JSONObject(unquote(value));
+                int pages = o.optInt("pages", 0);
+                int pageW = binding.web.getWidth();
+                // 每页恰为一个视口宽，总宽=页数×页宽，保证为页宽整数倍、翻页边界精确对齐
+                if (pages > 0 && pageW > 0) {
+                    binding.web.setMeasuredHorizontalRange(pages * pageW);
+                }
+            } catch (Exception ignored) {
+            }
+            if (after != null) after.run();
+        }));
     }
 
     /** 提取章节标题并显示在浮层 TextView，同时在 HTML 中隐藏该元素。 */
@@ -563,11 +593,15 @@ public class ReaderActivity extends AppCompatActivity {
             prefs.setFontZoom(prefs.getFontZoom() - 10);
             binding.web.getSettings().setTextZoom(prefs.getFontZoom());
             fontVal.setText(prefs.getFontZoom() + "%");
+            injectReaderCss();
+            schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
         });
         v.findViewById(R.id.btn_font_plus).setOnClickListener(x -> {
             prefs.setFontZoom(prefs.getFontZoom() + 10);
             binding.web.getSettings().setTextZoom(prefs.getFontZoom());
             fontVal.setText(prefs.getFontZoom() + "%");
+            injectReaderCss();
+            schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
         });
 
         buildLineSpacingOptions(v.findViewById(R.id.line_container));
@@ -602,6 +636,7 @@ public class ReaderActivity extends AppCompatActivity {
             btn.setOnClickListener(x -> {
                 prefs.setLineSpacing(idx);
                 injectReaderCss();
+                schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
                 buildLineSpacingOptions(container);
             });
             container.addView(btn);
@@ -628,6 +663,7 @@ public class ReaderActivity extends AppCompatActivity {
                 prefs.setTheme(idx);
                 applyThemeChrome();
                 injectReaderCss();
+                schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
                 buildThemeOptions(container);
             });
             container.addView(sw);
