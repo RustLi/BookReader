@@ -110,10 +110,21 @@ public class ReaderActivity extends AppCompatActivity {
             + "var st=document.createElement('style');"
             + "st.textContent='.ttshl{background:#FFE08A;border-radius:3px;}';"
             + "document.head.appendChild(st);window.__ttsReady=true;"
+            // 高亮当前句并返回它所在的页号(向下取整 absLeft/视口宽)，
+            // 由原生按整页宽对齐滚动，避免 scrollIntoView 自由滚动导致半页错位、边距不一致。
             + "window.__ttsHighlight=function(i){var pv=document.querySelector('.ttshl');"
             + "if(pv){pv.classList.remove('ttshl');}"
             + "var el=document.querySelector('.ttsseg[data-i=\"'+i+'\"]');"
-            + "if(el){el.classList.add('ttshl');el.scrollIntoView({block:'center'});}};"
+            + "if(!el){return -1;}el.classList.add('ttshl');"
+            + "var r=el.getBoundingClientRect();var vw=window.innerWidth||1;"
+            + "return Math.floor((window.pageXOffset+r.left)/vw);};"
+            // 返回当前页首句的句子索引:多栏横向分页下,已翻过的句子 rect.right<=0,
+            // 第一个右边缘仍在视口内(right>1)的句子即当前页起始句。
+            + "window.__ttsFirstVisible=function(){"
+            + "var els=document.querySelectorAll('.ttsseg');"
+            + "for(var k=0;k<els.length;k++){var r=els[k].getBoundingClientRect();"
+            + "if(r.right>1){return parseInt(els[k].getAttribute('data-i'),10)||0;}}"
+            + "return 0;};"
             + "Android.onSentences(JSON.stringify(sentences));"
             + "}catch(e){Android.onSentences('[]');}})();";
 
@@ -402,6 +413,7 @@ public class ReaderActivity extends AppCompatActivity {
             } else {
                 binding.web.scrollBy(pageW, 0);
                 updatePageInfo();
+                syncTtsToCurrentPageIfPlaying();
             }
         } else {
             if (scrollX <= 0) {
@@ -414,7 +426,16 @@ public class ReaderActivity extends AppCompatActivity {
             } else {
                 binding.web.scrollBy(-pageW, 0);
                 updatePageInfo();
+                syncTtsToCurrentPageIfPlaying();
             }
+        }
+    }
+
+    /** 朗读过程中翻页:让语音跳到新页首句继续朗读,而不是停留/被拉回旧页。 */
+    private void syncTtsToCurrentPageIfPlaying() {
+        if (tts != null && tts.isPlaying()) {
+            // 等滚动落定后再按新 scrollX 量取当前页首句
+            main.postDelayed(this::playFromCurrentPage, 60);
         }
     }
 
@@ -840,10 +861,25 @@ public class ReaderActivity extends AppCompatActivity {
     private void startTtsForCurrentChapter() {
         if (tts == null || !tts.isReady()) return;
         if (ttsPrepared && tts.hasSegments()) {
-            tts.resume();
+            playFromCurrentPage();
         } else {
             binding.web.evaluateJavascript(TTS_SCRIPT, null);   // 回调 onSentences 后开始
         }
+    }
+
+    /** 从当前翻到的页面的首句开始朗读,而不是固定从本章开头。 */
+    private void playFromCurrentPage() {
+        if (tts == null) return;
+        binding.web.evaluateJavascript(
+                "window.__ttsFirstVisible?window.__ttsFirstVisible():0",
+                value -> {
+                    int from = 0;
+                    try {
+                        from = Integer.parseInt(unquote(value));
+                    } catch (Exception ignored) {
+                    }
+                    tts.playFrom(from);
+                });
     }
 
     private void updateTtsIcon() {
@@ -866,7 +902,23 @@ public class ReaderActivity extends AppCompatActivity {
         @Override
         public void onSegmentStart(int index) {
             binding.web.evaluateJavascript(
-                    "window.__ttsHighlight&&window.__ttsHighlight(" + index + ")", null);
+                    "window.__ttsHighlight?window.__ttsHighlight(" + index + "):-1",
+                    value -> {
+                        int page;
+                        try {
+                            page = Integer.parseInt(unquote(value));
+                        } catch (Exception e) {
+                            page = -1;
+                        }
+                        if (page < 0) return;
+                        int pageW = binding.web.getWidth();
+                        if (pageW <= 0) return;
+                        int targetX = page * pageW;   // 对齐页边界，保持左右边距对称
+                        if (binding.web.getScrollX() != targetX) {
+                            binding.web.scrollTo(targetX, 0);
+                            updatePageInfo();
+                        }
+                    });
         }
 
         @Override
@@ -913,7 +965,7 @@ public class ReaderActivity extends AppCompatActivity {
                     return;
                 }
                 tts.setSegments(segs);
-                if (ttsWanted) tts.playFrom(0);
+                if (ttsWanted) playFromCurrentPage();
             });
         }
     }
