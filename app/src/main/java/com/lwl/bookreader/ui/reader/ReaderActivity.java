@@ -1,7 +1,10 @@
 package com.lwl.bookreader.ui.reader;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -19,8 +22,11 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.content.ContextCompat;
 import android.view.ViewGroup;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -77,6 +83,23 @@ public class ReaderActivity extends AppCompatActivity {
     private TtsManager tts;
     private boolean ttsWanted;          // 用户希望朗读(用于切章自动续读)
     private boolean ttsPrepared;        // 当前章节已注入分句脚本
+    private boolean ttsServiceStarted;  // 前台服务(锁屏/通知栏控制)已启动
+    private ActivityResultLauncher<String> notifPermLauncher;
+    /**
+     * 用户/锁屏翻页后期望显示的最小页号(0 基)。-1 表示无期望,语音可自由驱动正文。
+     * onSegmentStart 仅当语音句子所在页 >= 此值时才推进显示,即"只允许语音往前追,不允许拉回",
+     * 解决手动翻页被语音拉回旧页的问题。语音自然追上后由 onSegmentStart 清零。
+     */
+    private int ttsTargetPage = -1;
+    /**
+     * 翻页序号:每次 syncTtsToTargetPageIfPlaying 递增。
+     * playFromPage 的异步回包闭包持有发起时的序号,回包时只有等于当前序号才生效,
+     * 防止快速连点翻页时旧回包乱序到达污染当前状态。
+     */
+    private int ttsFlipSeq;
+    private int ttsPendingTargetPage = -1;  // 锁屏/不可见期间 turnPage 写入,onResume 兜底校正显示页
+    private int[] pageFirstSentence;    // 页号→首句索引,锁屏翻页直接查表无需 JS
+    private int pageMapGeneration;      // 每次切章/重排自增;映射表异步回包按代次校验,丢弃过期结果
 
     private ReaderPrefs prefs;
 
@@ -110,21 +133,41 @@ public class ReaderActivity extends AppCompatActivity {
             + "var st=document.createElement('style');"
             + "st.textContent='.ttshl{background:#FFE08A;border-radius:3px;}';"
             + "document.head.appendChild(st);window.__ttsReady=true;"
-            // 高亮当前句并返回它所在的页号(向下取整 absLeft/视口宽)，
-            // 由原生按整页宽对齐滚动，避免 scrollIntoView 自由滚动导致半页错位、边距不一致。
+            // 高亮当前句并返回它跨越的页区间 '起页,止页'(绝对坐标计算,锁屏下亦准确)。
+            // 原生侧仅当当前页不在区间内才按整页对齐滚动:避免跨页句把刚翻过去的页拉回来,
+            // 也避免 scrollIntoView 自由滚动导致半页错位、边距不一致。
             + "window.__ttsHighlight=function(i){var pv=document.querySelector('.ttshl');"
             + "if(pv){pv.classList.remove('ttshl');}"
             + "var el=document.querySelector('.ttsseg[data-i=\"'+i+'\"]');"
-            + "if(!el){return -1;}el.classList.add('ttshl');"
+            + "if(!el){return '-1';}el.classList.add('ttshl');"
             + "var r=el.getBoundingClientRect();var vw=window.innerWidth||1;"
-            + "return Math.floor((window.pageXOffset+r.left)/vw);};"
-            // 返回当前页首句的句子索引:多栏横向分页下,已翻过的句子 rect.right<=0,
-            // 第一个右边缘仍在视口内(right>1)的句子即当前页起始句。
-            + "window.__ttsFirstVisible=function(){"
-            + "var els=document.querySelectorAll('.ttsseg');"
+            + "var l=window.pageXOffset+r.left;"
+            + "return Math.floor(l/vw)+','+Math.floor((l+Math.max(r.width,1)-1)/vw);};"
+            // 返回指定页(0 基)首句的句子索引。
+            // 关键:页归属按"句子起点所在页"而不是"右边缘越过该页左边缘"。
+            // 这样跨页句归属于它起点的那一页;p 页首句一定是完全开始于第 p 页或之后的句子,
+            // 从该句开头朗读时听到的内容与画面对齐,不会出现跨页句把上一页内容读出来的错位。
+            // 用 pageXOffset+rect 的绝对坐标判断:锁屏下渲染进程未同步的滚动偏移会被抵消。
+            + "window.__ttsFirstOfPage=function(p){"
+            + "var els=document.querySelectorAll('.ttsseg');var vw=window.innerWidth||1;"
+            + "var thr=p*vw-1;"   // -1 容错:句子起点几乎贴左边缘也算属于该页
             + "for(var k=0;k<els.length;k++){var r=els[k].getBoundingClientRect();"
-            + "if(r.right>1){return parseInt(els[k].getAttribute('data-i'),10)||0;}}"
-            + "return 0;};"
+            + "if(window.pageXOffset+r.left>=thr){"
+            + "return parseInt(els[k].getAttribute('data-i'),10)||0;}}"
+            + "return -1;};"
+            // 一次性返回整张"页号→首句索引"表(JSON 数组,下标即页号)。
+            // 与 __ttsFirstOfPage 同语义、同坐标(纯用 JS 的 innerWidth,不掺原生设备像素),
+            // 单次调用算完所有页,替代原来逐页 N 次 evaluateJavascript,既一致又省往返。
+            + "window.__ttsPageMap=function(){"
+            + "var els=document.querySelectorAll('.ttsseg');var vw=window.innerWidth||1;"
+            + "var starts=[];for(var k=0;k<els.length;k++){"
+            + "var r=els[k].getBoundingClientRect();"
+            + "var sp=Math.floor((window.pageXOffset+r.left)/vw);if(sp<0)sp=0;starts.push(sp);}"
+            + "var total=starts.length?starts[starts.length-1]+1:1;"
+            + "var res=new Array(total);var j=0;"
+            + "for(var p=0;p<total;p++){while(j<starts.length&&starts[j]<p)j++;"
+            + "res[p]=j<els.length?(parseInt(els[j].getAttribute('data-i'),10)||0):-1;}"
+            + "return JSON.stringify(res);};"
             + "Android.onSentences(JSON.stringify(sentences));"
             + "}catch(e){Android.onSentences('[]');}})();";
 
@@ -136,6 +179,9 @@ public class ReaderActivity extends AppCompatActivity {
         setContentView(binding.getRoot());
         repository = new BookRepository(this);
         prefs = new ReaderPrefs(this);
+        // Android 13+ 通知权限(未授权时朗读仍可用,只是无锁屏/通知栏控制)
+        notifPermLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(), granted -> { });
 
         applyWindowInsets();
         setupWebView();
@@ -174,7 +220,7 @@ public class ReaderActivity extends AppCompatActivity {
                         updatePageInfo();
                     });
                 } else {
-                    schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
+                    schedulePaginationRefresh(ReaderActivity.this::refreshAfterRelayout);
                 }
                 ttsPrepared = false;
                 if (ttsWanted) {
@@ -288,6 +334,11 @@ public class ReaderActivity extends AppCompatActivity {
     private void loadChapter(int index) {
         if (epub == null) return;
         currentChapter = clamp(index, 0, epub.spine.size() - 1);
+        pageFirstSentence = null;
+        pageMapGeneration++;   // 作废上一章映射表的在途异步回包
+        // 切章会重排正文,旧的页号目标失效,清理避免污染下章的 onSegmentStart/onResume
+        ttsTargetPage = -1;
+        ttsPendingTargetPage = -1;
         binding.web.clearMeasuredHorizontalRange();
         File f = new File(extractDir, epub.spine.get(currentChapter).zipPath);
         binding.web.loadUrl(Uri.fromFile(f).toString());
@@ -403,6 +454,8 @@ public class ReaderActivity extends AppCompatActivity {
             refreshPaginationMetrics(() -> turnPage(delta, true));
             return;
         }
+        int curPage = scrollX / pageW;
+        int totalPages = Math.max(1, (contentW + pageW - 1) / pageW);
         if (delta > 0) {
             if (scrollX + pageW >= contentW - 10) {
                 int target = currentChapter + 1;
@@ -410,11 +463,11 @@ public class ReaderActivity extends AppCompatActivity {
                     restorePending = false;
                     loadChapter(target);
                 }
-            } else {
-                binding.web.scrollBy(pageW, 0);
-                updatePageInfo();
-                syncTtsToCurrentPageIfPlaying();
+                return;
             }
+            int targetPage = Math.min(curPage + 1, totalPages - 1);
+            scrollToPage(targetPage);
+            syncTtsToTargetPageIfPlaying(targetPage);
         } else {
             if (scrollX <= 0) {
                 int target = currentChapter - 1;
@@ -423,20 +476,35 @@ public class ReaderActivity extends AppCompatActivity {
                     restorePending = true;
                     loadChapter(target);
                 }
-            } else {
-                binding.web.scrollBy(-pageW, 0);
-                updatePageInfo();
-                syncTtsToCurrentPageIfPlaying();
+                return;
             }
+            int targetPage = Math.max(curPage - 1, 0);
+            scrollToPage(targetPage);
+            syncTtsToTargetPageIfPlaying(targetPage);
         }
     }
 
-    /** 朗读过程中翻页:让语音跳到新页首句继续朗读,而不是停留/被拉回旧页。 */
-    private void syncTtsToCurrentPageIfPlaying() {
-        if (tts != null && tts.isPlaying()) {
-            // 等滚动落定后再按新 scrollX 量取当前页首句
-            main.postDelayed(this::playFromCurrentPage, 60);
-        }
+    /** 显式滚动到指定页(0 基),并刷新页码。锁屏不可见时也写入 pending,onResume 兜底校正。 */
+    private void scrollToPage(int page) {
+        int pageW = binding.web.getWidth();
+        if (pageW <= 0) return;
+        binding.web.scrollTo(page * pageW, 0);
+        updatePageInfo();
+        // 锁屏期间 WebView 渲染线程被节流,此次 scrollTo 可能未真正落到画面,
+        // 留一份 pending 让 onResume 在可见后再次对齐到目标页。
+        ttsPendingTargetPage = page;
+    }
+
+    /** 朗读过程中翻页:让语音跳到目标页首句继续朗读,且立即同步目标句高亮。 */
+    private void syncTtsToTargetPageIfPlaying(int targetPage) {
+        if (tts == null || !tts.isPlaying()) return;
+        // 记录用户期望的最小显示页:onSegmentStart 只允许语音往前追,不允许拉回此页之前。
+        ttsTargetPage = targetPage;
+        // 递增序号:使所有尚未到达的旧 JS 回包作废,只有本次发起的回包才能生效。
+        ttsFlipSeq++;
+        playFromPage(targetPage, ttsFlipSeq);
+        // 锁屏副标题刷新一次,让控制中心立刻反映新状态
+        if (ttsServiceStarted) updateTtsService(true);
     }
 
     private void showToc() {
@@ -579,6 +647,10 @@ public class ReaderActivity extends AppCompatActivity {
                 if (!title.isEmpty()) {
                     currentChapterTitle = title;
                     binding.tvChapterTitle.setText(title);
+                    // 朗读中切章:把新章节标题同步到锁屏/通知栏
+                    if (ttsServiceStarted) {
+                        updateTtsService(tts != null && tts.isPlaying());
+                    }
                 }
             });
         });
@@ -615,14 +687,14 @@ public class ReaderActivity extends AppCompatActivity {
             binding.web.getSettings().setTextZoom(prefs.getFontZoom());
             fontVal.setText(prefs.getFontZoom() + "%");
             injectReaderCss();
-            schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
+            schedulePaginationRefresh(ReaderActivity.this::refreshAfterRelayout);
         });
         v.findViewById(R.id.btn_font_plus).setOnClickListener(x -> {
             prefs.setFontZoom(prefs.getFontZoom() + 10);
             binding.web.getSettings().setTextZoom(prefs.getFontZoom());
             fontVal.setText(prefs.getFontZoom() + "%");
             injectReaderCss();
-            schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
+            schedulePaginationRefresh(ReaderActivity.this::refreshAfterRelayout);
         });
 
         buildLineSpacingOptions(v.findViewById(R.id.line_container));
@@ -657,7 +729,7 @@ public class ReaderActivity extends AppCompatActivity {
             btn.setOnClickListener(x -> {
                 prefs.setLineSpacing(idx);
                 injectReaderCss();
-                schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
+                schedulePaginationRefresh(ReaderActivity.this::refreshAfterRelayout);
                 buildLineSpacingOptions(container);
             });
             container.addView(btn);
@@ -684,7 +756,7 @@ public class ReaderActivity extends AppCompatActivity {
                 prefs.setTheme(idx);
                 applyThemeChrome();
                 injectReaderCss();
-                schedulePaginationRefresh(ReaderActivity.this::updatePageInfo);
+                schedulePaginationRefresh(ReaderActivity.this::refreshAfterRelayout);
                 buildThemeOptions(container);
             });
             container.addView(sw);
@@ -842,13 +914,18 @@ public class ReaderActivity extends AppCompatActivity {
     // ---- 语音朗读 ----
 
     private void toggleTts() {
-        if (epub == null) return;
         if (tts != null && tts.isPlaying()) {
-            ttsWanted = false;
-            tts.pause();
-            updateTtsIcon();
-            return;
+            ttsPause();
+        } else {
+            ttsPlay();
         }
+    }
+
+    /** 开始/恢复朗读(按钮、锁屏、通知栏共用入口)。 */
+    private void ttsPlay() {
+        if (epub == null) return;
+        requestNotificationPermissionIfNeeded();
+        TtsService.setController(ttsController);
         ttsWanted = true;
         updateTtsIcon();
         if (tts == null) {
@@ -856,12 +933,55 @@ public class ReaderActivity extends AppCompatActivity {
         } else {
             startTtsForCurrentChapter();
         }
+        updateTtsService(true);
     }
+
+    /** 暂停朗读:保留前台服务与通知,便于从锁屏/通知栏恢复。 */
+    private void ttsPause() {
+        ttsWanted = false;
+        if (tts != null) tts.pause();
+        updateTtsIcon();
+        if (ttsServiceStarted) updateTtsService(false);
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33
+                && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                        != PackageManager.PERMISSION_GRANTED) {
+            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+        }
+    }
+
+    /** 同步书名/章节/播放状态到前台服务(锁屏与通知栏)。 */
+    private void updateTtsService(boolean playing) {
+        String title = book != null && !book.title.isEmpty()
+                ? book.title : getString(R.string.app_name);
+        TtsService.update(this, title, currentChapterTitle, playing);
+        ttsServiceStarted = true;
+    }
+
+    private void stopTtsService() {
+        if (ttsServiceStarted) {
+            TtsService.stop(this);
+            ttsServiceStarted = false;
+        }
+    }
+
+    /** 锁屏/通知栏控制事件:回主线程驱动现有播放与翻页逻辑。 */
+    private final TtsService.Controller ttsController = new TtsService.Controller() {
+        @Override public void onPlay() { main.post(ReaderActivity.this::ttsPlay); }
+        @Override public void onPause() { main.post(ReaderActivity.this::ttsPause); }
+        @Override public void onNextPage() { main.post(() -> turnPage(1)); }
+        @Override public void onPrevPage() { main.post(() -> turnPage(-1)); }
+    };
 
     private void startTtsForCurrentChapter() {
         if (tts == null || !tts.isReady()) return;
         if (ttsPrepared && tts.hasSegments()) {
-            playFromCurrentPage();
+            // 开始/恢复朗读:从当前句继续(resume)即可,不走 JS 异步定位,
+            // 避免 WebView 重排未落定时 __ttsFirstOfPage 返回 -1 导致 playFrom 不被调用、
+            // 进而 playing 一直为 false、按钮"按了没反应/无法暂停"。
+            tts.resume();
         } else {
             binding.web.evaluateJavascript(TTS_SCRIPT, null);   // 回调 onSentences 后开始
         }
@@ -869,17 +989,83 @@ public class ReaderActivity extends AppCompatActivity {
 
     /** 从当前翻到的页面的首句开始朗读,而不是固定从本章开头。 */
     private void playFromCurrentPage() {
+        int pageW = binding.web.getWidth();
+        // 非翻页路径(onResume / 章首注入完成),不持序号
+        playFromPage(pageW > 0 ? binding.web.getScrollX() / pageW : 0, 0);
+    }
+
+    /**
+     * 从指定页(0 基)首句开始朗读。优先查原生映射表(锁屏下无需 JS),否则回退到 JS 查询。
+     *
+     * @param flipSeq 翻页序号:>0 时表示本次为翻页驱动,异步回包返回时若已被新一次翻页覆盖
+     *                则丢弃;==0 表示非翻页路径(如 onResume),不做序号校验。
+     */
+    private void playFromPage(int page, int flipSeq) {
         if (tts == null) return;
+        // 原生映射表已就绪:直接查表,不依赖 evaluateJavascript(锁屏下 WebView 可能挂起)。
+        // 同步路径下,本次写入 ttsFlipSeq 后立刻调用,序号天然等价,无需校验。
+        if (pageFirstSentence != null && page >= 0 && page < pageFirstSentence.length
+                && pageFirstSentence[page] >= 0) {
+            int sentence = pageFirstSentence[page];
+            tts.playFrom(sentence);
+            highlightSentenceImmediate(sentence);
+            return;
+        }
         binding.web.evaluateJavascript(
-                "window.__ttsFirstVisible?window.__ttsFirstVisible():0",
+                "window.__ttsFirstOfPage?window.__ttsFirstOfPage(" + page + "):-1",
                 value -> {
-                    int from = 0;
+                    if (tts == null) return;
+                    // 翻页路径:回包时若序号已被新翻页覆盖,本次结果作废,避免乱序回包污染状态
+                    if (flipSeq > 0 && flipSeq != ttsFlipSeq) return;
+                    int from = -1;
                     try {
                         from = Integer.parseInt(unquote(value));
                     } catch (Exception ignored) {
                     }
-                    tts.playFrom(from);
+                    // JS 重排未落定/边界返回 -1 时,兜底从首句开始,保证 playing 被置为 true
+                    int sentence = Math.max(from, 0);
+                    tts.playFrom(sentence);
+                    highlightSentenceImmediate(sentence);
                 });
+    }
+
+    /** 立刻把 DOM 高亮切到指定句,不滚动页面(滚动由 turnPage 已经做过)。 */
+    private void highlightSentenceImmediate(int sentence) {
+        binding.web.evaluateJavascript(
+                "window.__ttsHighlight?window.__ttsHighlight(" + sentence + "):'-1'",
+                null);
+    }
+
+    /**
+     * 预建"页号→首句索引"原生映射表(供锁屏翻页直接查表,无需 JS)。
+     * 单次调用 __ttsPageMap 取回整张表:页号、首句完全由 JS 用 innerWidth 算出,
+     * 与高亮/翻页判断同坐标系,不再掺入原生设备像素页数,避免双坐标漂移导致音画错位。
+     * 句子加载完毕、以及每次版面重排(换字号/行距/主题)后都应调用,保证表与当前版面一致。
+     */
+    private void buildPageSentenceMap() {
+        final int gen = pageMapGeneration;
+        binding.web.evaluateJavascript(
+                "window.__ttsPageMap?window.__ttsPageMap():'[]'",
+                value -> {
+                    if (gen != pageMapGeneration) return;  // 章节/版面已变,丢弃过期结果
+                    int[] map = null;
+                    try {
+                        JSONArray a = new JSONArray(unquote(value));
+                        map = new int[a.length()];
+                        for (int i = 0; i < map.length; i++) map[i] = a.optInt(i, -1);
+                    } catch (Exception ignored) {
+                    }
+                    pageFirstSentence = map;
+                });
+    }
+
+    /** 版面重排后的统一收尾:刷新页码,并在朗读中时重建页→句映射,防止翻页跳到错位句子。 */
+    private void refreshAfterRelayout() {
+        updatePageInfo();
+        if (tts != null && ttsPrepared && tts.hasSegments()) {
+            pageMapGeneration++;      // 版面已变,作废旧映射的在途回包
+            buildPageSentenceMap();
+        }
     }
 
     private void updateTtsIcon() {
@@ -892,6 +1078,7 @@ public class ReaderActivity extends AppCompatActivity {
             if (!ok) {
                 ttsWanted = false;
                 updateTtsIcon();
+                stopTtsService();
                 Toast.makeText(ReaderActivity.this,
                         R.string.reader_tts_init_failed, Toast.LENGTH_LONG).show();
                 return;
@@ -901,21 +1088,34 @@ public class ReaderActivity extends AppCompatActivity {
 
         @Override
         public void onSegmentStart(int index) {
+            // __ttsHighlight 既负责 DOM 上色,又返回该句覆盖的页区间[start,end]
             binding.web.evaluateJavascript(
-                    "window.__ttsHighlight?window.__ttsHighlight(" + index + "):-1",
+                    "window.__ttsHighlight?window.__ttsHighlight(" + index + "):'-1'",
                     value -> {
-                        int page;
+                        int start, end;
                         try {
-                            page = Integer.parseInt(unquote(value));
+                            String[] parts = unquote(value).split(",");
+                            start = Integer.parseInt(parts[0].trim());
+                            end = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : start;
                         } catch (Exception e) {
-                            page = -1;
+                            return;
                         }
-                        if (page < 0) return;
+                        if (start < 0) return;
                         int pageW = binding.web.getWidth();
                         if (pageW <= 0) return;
-                        int targetX = page * pageW;   // 对齐页边界，保持左右边距对称
-                        if (binding.web.getScrollX() != targetX) {
-                            binding.web.scrollTo(targetX, 0);
+                        int cur = binding.web.getScrollX() / pageW;
+                        // 单向跟随:用户/锁屏翻页设了期望页,语音句子还在期望页之前时,
+                        // 不滚动也不强制对齐,等语音自然朗读追到期望页。
+                        // 句子覆盖区间一旦达到/越过期望页,本次自动翻页生效并清零期望页。
+                        if (ttsTargetPage >= 0) {
+                            if (end < ttsTargetPage) return;     // 还没追上,放着
+                            ttsTargetPage = -1;                   // 已追上,放开自动跟随
+                        }
+                        if (cur >= start && cur <= end) return;   // 当前句覆盖当前页,不动
+                        // 仅当画面落后于句起点所在页时,前进到 start;
+                        // 不允许把画面拉回到 start 之前(跨页句的 start 可能是上一页)。
+                        if (cur < start) {
+                            binding.web.scrollTo(start * pageW, 0);
                             updatePageInfo();
                         }
                     });
@@ -928,7 +1128,9 @@ public class ReaderActivity extends AppCompatActivity {
                 loadChapter(currentChapter + 1);   // onPageFinished 因 ttsWanted 会重新注入并续读
             } else {
                 ttsWanted = false;
+                if (tts != null) tts.pause();   // 释放 WakeLock
                 updateTtsIcon();
+                stopTtsService();
                 Toast.makeText(ReaderActivity.this,
                         R.string.reader_tts_finished, Toast.LENGTH_SHORT).show();
             }
@@ -958,13 +1160,16 @@ public class ReaderActivity extends AppCompatActivity {
                         loadChapter(currentChapter + 1);
                     } else if (ttsWanted) {
                         ttsWanted = false;
+                        tts.pause();   // 释放 WakeLock
                         updateTtsIcon();
+                        stopTtsService();
                         Toast.makeText(ReaderActivity.this,
                                 R.string.reader_tts_no_text, Toast.LENGTH_SHORT).show();
                     }
                     return;
                 }
                 tts.setSegments(segs);
+                buildPageSentenceMap();  // 预建原生映射表,供锁屏翻页直接查表
                 if (ttsWanted) playFromCurrentPage();
             });
         }
@@ -989,16 +1194,41 @@ public class ReaderActivity extends AppCompatActivity {
     protected void onPause() {
         super.onPause();
         saveProgress();
+        // 熄屏/切后台不暂停朗读,由 WakeLock 维持 CPU 继续播放;
+        // 真正退出阅读页时在 onDestroy 中 shutdown。
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
         if (tts != null && tts.isPlaying()) {
-            ttsWanted = false;
-            tts.pause();
-            updateTtsIcon();
+            // 从锁屏/后台恢复。优先消费 ttsPendingTargetPage(锁屏期间翻页写入),
+            // 把 WebView 可见后的实际显示位置校正到目标页,再让语音跟随。
+            // 如果没有 pending,则把语音对齐到当前显示页(正常恢复路径)。
+            final int pending = ttsPendingTargetPage;
+            ttsPendingTargetPage = -1;
+            main.postDelayed(() -> {
+                int pageW = binding.web.getWidth();
+                if (pending >= 0 && pageW > 0) {
+                    // 校正显示页到锁屏期间翻到的目标页
+                    binding.web.scrollTo(pending * pageW, 0);
+                    updatePageInfo();
+                    // 走非翻页路径(无需序号校验):此时已经回到前台,不会再有竞态
+                    playFromPage(pending, 0);
+                } else {
+                    playFromCurrentPage();
+                }
+            }, 200);
+        } else {
+            ttsPendingTargetPage = -1;
         }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        TtsService.setController(null);
+        stopTtsService();
         if (tts != null) {
             tts.shutdown();
             tts = null;

@@ -41,6 +41,11 @@
     <string name="reader_tts_init_failed">语音引擎初始化失败,请检查系统 TTS</string>
     <string name="reader_tts_finished">已读完全书</string>
     <string name="reader_tts_no_text">本章没有可朗读的文字</string>
+    <string name="tts_channel_name">朗读播放</string>
+    <string name="tts_action_prev">上一页</string>
+    <string name="tts_action_next">下一页</string>
+    <string name="tts_action_play">播放</string>
+    <string name="tts_action_pause">暂停</string>
 
     <!-- 阅读中首页 -->
     <string name="reading_title">阅读中</string>

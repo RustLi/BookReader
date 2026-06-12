@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- 熄屏后保持 CPU 运行,使 TTS 朗读可继续 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 朗读前台服务:切后台/锁屏不被回收,targetSdk 34 需声明媒体播放类型 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13+ 显示播放控制通知 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Android 11+ 需声明可见性才能绑定系统 TTS 引擎 -->
     <queries>
         <intent>
@@ -31,6 +39,11 @@
             android:exported="false"
             android:launchMode="singleTask"
             android:theme="@style/Theme.BookReader" />
+
+        <service
+            android:name=".ui.reader.TtsService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
     </application>
 
 </manifest>
